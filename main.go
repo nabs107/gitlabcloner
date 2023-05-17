@@ -12,6 +12,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/fatih/color"
 )
 
 type Config struct {
@@ -20,15 +22,24 @@ type Config struct {
 	AccessToken string `json:"access_token"`
 }
 
+type Group struct {
+	ID        int       `json:"id"`
+	Projects  []Project `json:"projects"`
+	Subgroups []Group   `json:"subgroups"`
+	// Include other fields if needed
+}
+
 type Project struct {
-	ID            int    `json:"id"`
-	Name          string `json:"name"`
-	Namespace     Namespace
-	HTTPURLToRepo string `json:"http_url_to_repo"`
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	Namespace         Namespace
+	HTTPURLToRepo     string `json:"http_url_to_repo"`
+	SubprojectsCount  int    `json:"subprojects_count"`
+	NameWithNamespace string `json:"name_with_namespace"`
 }
 
 type Namespace struct {
-	NameWithNamespace string `json:"name_with_namespace"`
+	FullPath string `json:"full_path"`
 }
 
 func main() {
@@ -78,7 +89,7 @@ func main() {
 }
 
 func fetchProjects(config Config) {
-	fullURL := fmt.Sprintf("%sapi/v4/groups/%s/projects?private_token=%s", config.GitLabURL, config.GroupID, config.AccessToken)
+	fullURL := fmt.Sprintf("%sapi/v4/groups/%s/projects?include_subgroups=true&private_token=%s&per_page=100", config.GitLabURL, config.GroupID, config.AccessToken)
 
 	resp, err := http.Get(fullURL)
 	if err != nil {
@@ -86,14 +97,8 @@ func fetchProjects(config Config) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal("Error reading response body:", err)
-	}
-
 	var projects []Project
-	err = json.Unmarshal(body, &projects)
-	if err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&projects); err != nil {
 		log.Fatal("Error parsing JSON response:", err)
 	}
 
@@ -104,7 +109,16 @@ func fetchProjects(config Config) {
 
 	fmt.Println("Available Projects:")
 	for _, project := range projects {
-		fmt.Println(project.Name, project.ID)
+		var projectType string
+
+		if strings.Contains(strings.ToLower(project.NameWithNamespace), "android") {
+			projectType = "android"
+		} else if strings.Contains(strings.ToLower(project.NameWithNamespace), "ios") {
+			projectType = "ios"
+		} else {
+			projectType = project.NameWithNamespace
+		}
+		fmt.Printf("%s %s %s\n", project.Name, color.YellowString(fmt.Sprintf("%d", project.ID)), projectType)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
@@ -124,19 +138,15 @@ func fetchProjects(config Config) {
 		log.Fatal("Invalid project selected")
 	}
 
-	if selectedProject.ID != 0 {
-		cloneURL := selectedProject.HTTPURLToRepo
-		fmt.Println("Cloning project...")
-		fmt.Println("Cloning", selectedProject.Name)
-		cmd := exec.Command("git", "clone", cloneURL)
-		err := cmd.Run()
-		if err != nil {
-			log.Fatal("Error cloning project:", err)
-		}
-		fmt.Println("Project cloned successfully.")
-	} else {
-		fmt.Println("Invalid project ID.")
+	cloneURL := selectedProject.HTTPURLToRepo
+	fmt.Println("Cloning project...")
+	fmt.Println("Cloning", selectedProject.Name)
+	cmd := exec.Command("git", "clone", cloneURL)
+	err = cmd.Run()
+	if err != nil {
+		log.Fatal("Error cloning project:", err)
 	}
+	fmt.Println("Project cloned successfully.")
 }
 
 func fileExists(filePath string) bool {
